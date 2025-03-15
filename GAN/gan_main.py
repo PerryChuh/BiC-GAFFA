@@ -45,7 +45,7 @@ def main():
     gan_list = [gan_main, wgan_main, wgan_gp_main, con_gan_main, gan_unroll_main, bi_gan_main, bi_wgan_main, bi_congan_main]
     opt_list = [opt_gan, opt_wgan, opt_wgan_gp, opt_con_gan, opt_gan_unroll, opt_bi_gan, opt_bi_wgan, opt_bi_congan]
 
-    inds = [6, 7, 98]
+    inds = [6, 7, 8]
     gans = [gan_list[i-1] for i in inds]
     opts = [opt_list[i-1] for i in inds]
 
