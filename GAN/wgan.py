@@ -8,139 +8,174 @@ import seaborn as sns
 
 import torch
 import torch.nn as nn
+from torch.autograd import Variable
 
-from mixture_gaussian import dis_draw, GMM, plot_samples
-
-from models import GeneratorW as Generator
-from models import DiscriminatorW as Discriminator
-from utils import OT_err as OT_matrice
+from models import MNISTGenerator, MNISTDiscriminator
+from utils import load_mnist, save_images
     
 #%%
 class opts():
     def __init__(self):
-        self.name = "WGAN"
-        self.n_steps = 2701
-        self.batch_size = 512
-        self.latent_dim = 128
-        self.z_dim = 256
+        self.name = "WGAN-MNIST"
+        self.n_epochs = 100
+        self.batch_size = 64
+        self.latent_dim = 100
+        self.img_shape = (1, 28, 28)
         self.gpu = 0
-        self.d_lr = 1e-4
-        self.g_lr = 1e-3
+        self.d_lr = 0.0002
+        self.g_lr = 0.0002
         self.b1 = 0.5
         self.b2 = 0.999
-        self.clip_value = 0.001
+        self.clip_value = 0.01
         self.d_steps = 5
-        self.seed = 0
-        self.nGaussians = 8
-        self.prefix = "images/WGAN" + f"_dlr={self.d_lr}_glr={self.g_lr}_dloop={self.d_steps}_clip={self.clip_value}_seed={self.seed}_nGaussians={self.nGaussians}"
+        self.seed = 42
+        self.sample_interval = 10
+        self.data_path = './data'
+        self.prefix = f"images/WGAN_MNIST_dlr={self.d_lr}_glr={self.g_lr}_dloop={self.d_steps}_clip={self.clip_value}_seed={self.seed}"
         
     def update_prefix(self):
-        self.prefix = "images/WGAN" + f"_dlr={self.d_lr}_glr={self.g_lr}_dloop={self.d_steps}_clip={self.clip_value}_seed={self.seed}_nGaussians={self.nGaussians}"
+        self.prefix = f"images/WGAN_MNIST_dlr={self.d_lr}_glr={self.g_lr}_dloop={self.d_steps}_clip={self.clip_value}_seed={self.seed}"
 
 def main(opt=None):
     os.makedirs("images", exist_ok=True)
     plt.style.use('ggplot')
 
     opt = opts() if opt is None else opt
-    opt.prefix = "images/WGAN" + f"_dlr={opt.d_lr}_glr={opt.g_lr}_dloop={opt.d_steps}_clip={opt.clip_value}_seed={opt.seed}_nGaussians={opt.nGaussians}"
+    opt.update_prefix()
 
+    # 设置随机种子
+    torch.manual_seed(opt.seed)
+    np.random.seed(opt.seed)
+    
+    # 配置设备
     cuda = True if torch.cuda.is_available() else False
     device = torch.device("cuda:"+f"{opt.gpu}" if cuda else "cpu")
-
-    # Initialize generator and discriminator
-    generator = Generator(input_size=256, hidden_size=128, output_size=2)
-    discriminator = Discriminator(input_size=2, hidden_size=128, output_size=1)
+    
+    # 加载MNIST数据集
+    dataloader = load_mnist(batch_size=opt.batch_size, data_path=opt.data_path)
+    
+    # 初始化生成器和判别器
+    generator = MNISTGenerator(latent_dim=opt.latent_dim, img_shape=opt.img_shape)
+    discriminator = MNISTDiscriminator(img_shape=opt.img_shape)
 
     if cuda:
         generator.to(device)
         discriminator.to(device)
 
-    # Optimizers
-    optimizer_G = torch.optim.Adam(generator.parameters(), lr=opt.g_lr, betas=(opt.b1, opt.b2))
-    optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=opt.d_lr, betas=(opt.b1, opt.b2))
-    # optimizer_G = torch.optim.RMSprop(generator.parameters(), lr=opt.g_lr)
-    # optimizer_D = torch.optim.RMSprop(discriminator.parameters(), lr=opt.d_lr)
+    # 优化器
+    optimizer_G = torch.optim.RMSprop(generator.parameters(), lr=opt.g_lr)
+    optimizer_D = torch.optim.RMSprop(discriminator.parameters(), lr=opt.d_lr)
 
-    rng = np.random.default_rng(opt.seed)
-    torch.manual_seed = opt.seed
-    P = rng.random(opt.nGaussians)
-    P /= np.sum(P)
-    gmm = GMM(P)
-
-    OT_err = lambda generator: OT_matrice(generator, gmm=gmm, z_dim=opt.z_dim, device=device, N=1000)
-
-    EMs = []
-    Time = []
-    T = 0
-
-    for step in range(opt.n_steps):
-        t0 = time.time()
-
-        # Adversarial ground truths
-        # ---------------------
-        #  Train Discriminator
-        # ---------------------
-
-        for _ in range(opt.d_steps):
-            optimizer_D.zero_grad()
-
-            # Configure input
-            # imgs = torch.from_numpy(gmm.sample((opt.batch_size,)))
-            imgs = gmm.sample((opt.batch_size,))
-            # real_imgs = imgs.type(Tensor)
+    # 训练记录
+    losses = {"G": [], "D": []}
+    training_time = []
+    start_time = time.time()
+    
+    # 训练循环
+    for epoch in range(opt.n_epochs):
+        epoch_start_time = time.time()
+        epoch_g_loss = 0
+        epoch_d_loss = 0
+        
+        for i, (imgs, _) in enumerate(dataloader):
+            
+            # 配置真实图像
             real_imgs = imgs.to(device)
-
-            # Sample noise as generator input
-            gen_input = torch.from_numpy(np.random.normal(size = (opt.batch_size, opt.z_dim)).astype("float32")).to(device)
-
-            # Generate a batch of images
-            with torch.no_grad():
-                gen_imgs = generator(gen_input)
-
-            # Measure discriminator's ability to classify real from generated samples
-            d_loss = -torch.mean(discriminator(real_imgs)) + torch.mean(discriminator(gen_imgs))
-
-            d_loss.backward()
-            optimizer_D.step()
-
-            # Clip weights of discriminator
-            for p in discriminator.parameters():
-                p.data.clamp_(-opt.clip_value, opt.clip_value)
-
-        # -----------------
-        #  Train Generator
-        # -----------------
-
-        optimizer_G.zero_grad()
-
-        # Sample noise as generator input
-        gen_input = torch.from_numpy(np.random.normal(size = (opt.batch_size, opt.z_dim)).astype("float32")).to(device)
-
-        # Generate a batch of images
-        gen_imgs = generator(gen_input)
-
-        # Loss measures generator's ability to fool the discriminator
-        g_loss = -torch.mean(discriminator(gen_imgs))
-
-        g_loss.backward()
-        optimizer_G.step()
-
-        T += time.time() - t0
-        Time.append(T)
-
-        EM_distance = OT_err(generator)
-        EMs.append(EM_distance)
-
-        sys.stdout.write(
-            "%10s [step %5d/%5d] [D loss: %.2f] [G loss: %.2f] [OT loss: %.2f] \r"
-            % ("WGAN", step, opt.n_steps, d_loss.item() / 2, g_loss.item(), EM_distance)
-        )
-        sys.stdout.flush()
-
-
-    print()
-    pd.DataFrame({"Time": Time, "EM": EMs}).to_csv(opt.prefix + "_EM.csv")
-
+            
+            # ---------------------
+            #  训练判别器
+            # ---------------------
+            for _ in range(opt.d_steps):
+                optimizer_D.zero_grad()
+                
+                # 生成一批假图像
+                z = torch.randn(imgs.shape[0], opt.latent_dim).to(device)
+                fake_imgs = generator(z).detach()
+                
+                # 训练判别器
+                # 判别器分数
+                real_validity = discriminator(real_imgs)
+                fake_validity = discriminator(fake_imgs)
+                
+                # 计算损失
+                d_loss = -torch.mean(real_validity) + torch.mean(fake_validity)
+                
+                # 反向传播和优化
+                d_loss.backward()
+                optimizer_D.step()
+                
+                # 裁剪判别器权重
+                for p in discriminator.parameters():
+                    p.data.clamp_(-opt.clip_value, opt.clip_value)
+            
+            # ---------------------
+            #  训练生成器
+            # ---------------------
+            optimizer_G.zero_grad()
+            
+            # 生成一批图像
+            z = torch.randn(imgs.shape[0], opt.latent_dim).to(device)
+            gen_imgs = generator(z)
+            
+            # 判别器分数
+            fake_validity = discriminator(gen_imgs)
+            
+            # 计算生成器损失
+            g_loss = -torch.mean(fake_validity)
+            
+            # 反向传播和优化
+            g_loss.backward()
+            optimizer_G.step()
+            
+            # 记录损失
+            epoch_d_loss += d_loss.item()
+            epoch_g_loss += g_loss.item()
+            
+            # 打印训练信息
+            sys.stdout.write(
+                "\r[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f]"
+                % (epoch, opt.n_epochs, i, len(dataloader), d_loss.item(), g_loss.item())
+            )
+            sys.stdout.flush()
+        
+        # 计算平均损失
+        epoch_d_loss /= len(dataloader)
+        epoch_g_loss /= len(dataloader)
+        losses["D"].append(epoch_d_loss)
+        losses["G"].append(epoch_g_loss)
+        
+        # 记录训练时间
+        epoch_time = time.time() - epoch_start_time
+        training_time.append(time.time() - start_time)
+        
+        # 保存生成的图像样本
+        if epoch % opt.sample_interval == 0:
+            epoch_save_path = f"{opt.prefix}_epoch_{epoch}"
+            save_images(generator, opt.latent_dim, epoch, n_row=5, save_path=epoch_save_path)
+            print(f"已保存epoch {epoch}的生成图像到 {epoch_save_path}.png")
+        
+        print(f"\nEpoch {epoch}/{opt.n_epochs} completed in {epoch_time:.2f}s. D loss: {epoch_d_loss:.6f}, G loss: {epoch_g_loss:.6f}")
+    
+    # 保存模型
+    torch.save(generator.state_dict(), f"{opt.prefix}_generator.pth")
+    torch.save(discriminator.state_dict(), f"{opt.prefix}_discriminator.pth")
+    
+    # 保存训练记录
+    pd.DataFrame({
+        "Time": training_time,
+        "D_Loss": losses["D"],
+        "G_Loss": losses["G"]
+    }).to_csv(f"{opt.prefix}_training_log.csv", index=False)
+    
+    # 绘制损失曲线
+    plt.figure(figsize=(10, 5))
+    plt.plot(losses["D"], label="Discriminator")
+    plt.plot(losses["G"], label="Generator")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.savefig(f"{opt.prefix}_loss_curve.png")
+    plt.close()
 
 if __name__ == "__main__":
     main()
