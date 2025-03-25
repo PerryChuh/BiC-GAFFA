@@ -9,9 +9,10 @@ import seaborn as sns
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
+from torchvision.utils import save_image
 
 from models import MNISTGenerator, MNISTDiscriminator
-from utils import load_mnist, save_images
+from utils import load_mnist
     
 #%%
 class opts():
@@ -31,6 +32,7 @@ class opts():
         self.seed = 42
         self.sample_interval = 10
         self.data_path = './data'
+        self.result_dir = "images"
         self.prefix = f"images/WGAN_MNIST_dlr={self.d_lr}_glr={self.g_lr}_dloop={self.d_steps}_clip={self.clip_value}_seed={self.seed}"
         
     def update_prefix(self):
@@ -150,9 +152,12 @@ def main(opt=None):
         
         # 保存生成的图像样本
         if epoch % opt.sample_interval == 0:
-            epoch_save_path = f"{opt.prefix}_epoch_{epoch}"
-            save_images(generator, opt.latent_dim, epoch, n_row=5, save_path=epoch_save_path)
-            print(f"已保存epoch {epoch}的生成图像到 {epoch_save_path}.png")
+            # 使用与bi_wgan.py相同的方式保存图像
+            z = torch.randn(25, opt.latent_dim).to(device)
+            with torch.no_grad():
+                gen_imgs = generator(z)
+            save_image(gen_imgs.data, f"{opt.result_dir}/wgan_epoch_{epoch}.png", nrow=5, normalize=True)
+            print(f"\n已保存epoch {epoch}的生成图像到 {opt.result_dir}/wgan_epoch_{epoch}.png")
         
         print(f"\nEpoch {epoch}/{opt.n_epochs} completed in {epoch_time:.2f}s. D loss: {epoch_d_loss:.6f}, G loss: {epoch_g_loss:.6f}")
     
@@ -165,7 +170,7 @@ def main(opt=None):
         "Time": training_time,
         "D_Loss": losses["D"],
         "G_Loss": losses["G"]
-    }).to_csv(f"{opt.prefix}_training_log.csv", index=False)
+    }).to_csv(f"{opt.result_dir}/wgan_training_log.csv", index=False)
     
     # 绘制损失曲线
     plt.figure(figsize=(10, 5))
@@ -174,7 +179,7 @@ def main(opt=None):
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.legend()
-    plt.savefig(f"{opt.prefix}_loss_curve.png")
+    plt.savefig(f"{opt.result_dir}/wgan_loss_curve.png")
     plt.close()
 
 if __name__ == "__main__":

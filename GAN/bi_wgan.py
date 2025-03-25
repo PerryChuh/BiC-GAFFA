@@ -10,6 +10,8 @@ from torch.utils.tensorboard import SummaryWriter
 from torchvision import datasets, transforms
 from torchvision.utils import save_image
 from torch.utils.data import DataLoader
+import pandas as pd
+import matplotlib.pyplot as plt
 
 def main():
     parser = argparse.ArgumentParser()
@@ -348,7 +350,7 @@ def main():
         z = torch.randn(25, opt.latent_dim).to(device)
         with torch.no_grad():
             gen_imgs = generator(z)
-        save_image(gen_imgs.data, f"{opt.result_dir}/epoch_{epoch}.png", nrow=5, normalize=True)
+        save_image(gen_imgs.data, f"{opt.result_dir}/bi_wgan_epoch_{epoch}.png", nrow=5, normalize=True)
         
         # 保存模型
         if (epoch + 1) % opt.save_freq == 0:
@@ -360,6 +362,25 @@ def main():
     # 保存最终模型
     save_model(opt.n_epochs-1, generator, discriminator1, discriminator2,
              optimizer_G, optimizer_D1, optimizer_D2, lamk, zk, opt)
+    
+    # 保存训练记录
+    pd.DataFrame({
+        "Time": training_time,
+        "D1_Loss": losses["d1"],
+        "D2_Loss": losses["d2"],
+        "G_Loss": losses["g"]
+    }).to_csv(f"{opt.result_dir}/bi_wgan_training_log.csv", index=False)
+    
+    # 绘制损失曲线
+    plt.figure(figsize=(10, 5))
+    plt.plot(losses["d1"], label="Discriminator1")
+    plt.plot(losses["d2"], label="Discriminator2")
+    plt.plot(losses["g"], label="Generator")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.savefig(f"{opt.result_dir}/bi_wgan_loss_curve.png")
+    plt.close()
     
     # 关闭TensorBoard
     if writer:

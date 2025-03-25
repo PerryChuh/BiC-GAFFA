@@ -8,3 +8,4 @@ data/
 *.bmp
 *.tiff
 /logs
+*.csv
